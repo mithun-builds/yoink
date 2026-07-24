@@ -1,4 +1,4 @@
-# YouTube Playlist Transcript Fetcher
+# YouTube (Incl. Playlist) Transcript Fetcher
 
 Download transcripts for every video in a YouTube playlist (or a single video)
 using `yt-dlp` for playlist/video metadata and `youtube-transcript-api` for
