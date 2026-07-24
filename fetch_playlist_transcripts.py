@@ -27,6 +27,8 @@ from youtube_transcript_api._errors import (
     TranscriptsDisabled,
     NoTranscriptFound,
     VideoUnavailable,
+    RequestBlocked,
+    IpBlocked,
 )
 
 
@@ -95,12 +97,21 @@ def get_playlist_entries(playlist_url: str):
 
 def fetch_transcript_text(video_id: str, languages=("en", "en-US", "en-GB", "hi")):
     """Fetch transcript, preferring manually created ones, falling back to
-    auto-generated, then to any available translated transcript."""
+    auto-generated, then to any available translated transcript.
+
+    Returns (text, error_message, was_rate_limited). was_rate_limited is True
+    only when YouTube's own IP-block/request-block exceptions are raised, so
+    callers can decide to back off/retry precisely (rather than guessing from
+    error text).
+    """
     ytt_api = YouTubeTranscriptApi()
+
     try:
         transcript_list = ytt_api.list(video_id)
+    except (RequestBlocked, IpBlocked) as ex:
+        return None, f"Rate-limited/IP-blocked ({ex.__class__.__name__})", True
     except (TranscriptsDisabled, VideoUnavailable) as ex:
-        return None, f"No transcript available ({ex.__class__.__name__})"
+        return None, f"No transcript available ({ex.__class__.__name__})", False
 
     transcript = None
     try:
@@ -118,19 +129,41 @@ def fetch_transcript_text(video_id: str, languages=("en", "en-US", "en-GB", "hi"
                     continue
 
     if transcript is None:
-        return None, "No transcript found in requested or fallback languages"
+        return None, "No transcript found in requested or fallback languages", False
 
     try:
         fetched = transcript.fetch()
+    except (RequestBlocked, IpBlocked) as ex:
+        return None, f"Rate-limited/IP-blocked ({ex.__class__.__name__})", True
     except Exception as ex:
-        return None, f"Fetch failed: {ex}"
+        return None, f"Fetch failed: {ex}", False
 
     text = " ".join(snippet.text for snippet in fetched)
-    return text, None
+    return text, None, False
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Examples:
+  # Fetch every video in a playlist
+  python fetch_playlist_transcripts.py "https://www.youtube.com/playlist?list=PL..."
+
+  # Fetch just the first 10 videos
+  python fetch_playlist_transcripts.py "https://www.youtube.com/playlist?list=PL..." --limit 10
+
+  # Resume from video 11 through 41 (skip ones you already fetched)
+  python fetch_playlist_transcripts.py "https://www.youtube.com/playlist?list=PL..." --start 11 --end 41
+
+  # Space out requests more to avoid YouTube's IP rate-limiting
+  python fetch_playlist_transcripts.py "https://www.youtube.com/playlist?list=PL..." --delay 10
+
+  # Works on a single video URL too, no playlist needed
+  python fetch_playlist_transcripts.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+""",
+    )
     parser.add_argument("playlist_url", help="Full YouTube playlist URL")
     parser.add_argument(
         "--limit", type=int, default=None,
@@ -172,17 +205,24 @@ def main():
         sliced = entries[: args.limit] if args.limit else entries
         targets = list(enumerate(sliced, start=1))
 
+    consecutive_blocks = 0
+
     for n, (playlist_pos, e) in enumerate(targets):
         vid, title, url = e["id"], e["title"], e["url"]
         print(f"[{playlist_pos}/{len(entries)}] {title} ({vid}) ... ", end="", flush=True)
 
-        text, err = fetch_transcript_text(vid)
+        text, err, was_blocked = fetch_transcript_text(vid)
 
-        # One retry with a longer backoff if it looks like a rate-limit block
-        if text is None and err and ("block" in err.lower() or "429" in err):
+        # One retry with a longer backoff, but only for a genuine IP-block
+        if was_blocked:
             print("rate-limited, waiting 20s and retrying once... ", end="", flush=True)
             time.sleep(20)
-            text, err = fetch_transcript_text(vid)
+            text, err, was_blocked = fetch_transcript_text(vid)
+
+        if was_blocked:
+            consecutive_blocks += 1
+        else:
+            consecutive_blocks = 0
 
         fname = f"{playlist_pos:02d}_{vid}_{sanitize_filename(title)}.txt"
         fpath = os.path.join(args.out, fname)
@@ -195,6 +235,15 @@ def main():
                 f.write(f"[TRANSCRIPT UNAVAILABLE: {err}]")
 
         print("done" if text else f"SKIPPED ({err})")
+
+        # Stop early if YouTube is clearly blocking us outright -- further
+        # requests will just fail the same way and waste time.
+        if consecutive_blocks >= 3:
+            print(
+                "\nStopping: 3 consecutive IP-block errors. "
+                "Wait before retrying, or switch networks/VPN, then resume with --start."
+            )
+            break
 
         # pause between requests (skip after the very last one)
         if n < len(targets) - 1:

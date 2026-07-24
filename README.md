@@ -1,5 +1,7 @@
 # YouTube (Incl. Playlist) Transcript Fetcher
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Download transcripts for every video in a YouTube playlist (or a single video)
 using `yt-dlp` for playlist/video metadata and `youtube-transcript-api` for
 transcript text.
@@ -49,10 +51,14 @@ Creates a `transcripts/` folder containing:
 
 **"YouTube is blocking requests from your IP"**
 This is a rate-limit/IP block from YouTube, not a bug in the script. It
-typically happens after fetching many transcripts in a short time. Options:
+typically happens after fetching many transcripts in a short time. The script
+now detects this precisely (not just by guessing from error text) and will
+automatically stop after 3 consecutive IP-block errors, rather than burning
+through the rest of the playlist on doomed requests. When it stops:
 - Wait 15–60+ minutes before retrying
 - Switch networks (e.g. mobile hotspot) or toggle a VPN to get a new IP
 - Increase `--delay` to space out requests further
+- Resume from where it stopped using `--start <n>`
 - As a last resort, fetch transcripts manually via YouTube's UI
   ("..." menu under a video → Show transcript)
 
@@ -61,3 +67,7 @@ Make sure you're passing a URL that includes a `list=` parameter. The script
 normalizes combined `watch?v=...&list=...` URLs automatically, but a bare
 video URL with no playlist reference will only ever return that one video (by
 design — see standalone-video support above).
+
+## License
+
+[MIT](LICENSE)
