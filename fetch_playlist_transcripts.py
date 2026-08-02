@@ -8,7 +8,7 @@ Usage:
     python fetch_playlist_transcripts.py "<playlist_url>" --limit 10
 
 Output:
-    Creates a folder ./transcripts/ with one .txt file per video,
+    Creates a folder ./downloads/ with one .txt file per video,
     named "<index>_<video_id>_<title>.txt", plus a playlist_index.json
     listing all videos found (title, id, url) so you can see what's
     in the full playlist even if you only fetch a subset.
@@ -178,7 +178,7 @@ Examples:
         help="1-based playlist position to stop at (inclusive), e.g. 41 for the last video",
     )
     parser.add_argument(
-        "--out", default="transcripts", help="Output directory (default: transcripts)"
+        "--out", default="downloads", help="Output directory (default: downloads)"
     )
     parser.add_argument(
         "--delay", type=float, default=4.0,

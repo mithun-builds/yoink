@@ -43,9 +43,14 @@ detects there's no playlist and treats it as a single video.
 
 ## Output
 
-Creates a `transcripts/` folder containing:
+Creates a `downloads/` folder containing:
 - `playlist_index.json` — metadata (title, id, url) for every video found in the playlist
 - One `.txt` file per fetched video, named `<position>_<video_id>_<title>.txt`
+
+Use `--out <dir>` to write somewhere else:
+```bash
+python fetch_playlist_transcripts.py "<playlist_url>" --out my-folder
+```
 
 ## Troubleshooting
 
