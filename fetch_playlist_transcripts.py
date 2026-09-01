@@ -69,13 +69,7 @@ def get_playlist_entries(playlist_url: str):
         vid = info.get("id")
         title = info.get("title") or vid
         return (
-            [
-                {
-                    "id": vid,
-                    "title": title,
-                    "url": f"https://www.youtube.com/watch?v={vid}",
-                }
-            ],
+            [{"id": vid, "title": title, "url": _entry_url(info, vid, playlist_url)}],
             title,
         )
 
@@ -85,14 +79,26 @@ def get_playlist_entries(playlist_url: str):
             continue
         vid = e.get("id")
         title = e.get("title") or vid
-        entries.append(
-            {
-                "id": vid,
-                "title": title,
-                "url": f"https://www.youtube.com/watch?v={vid}",
-            }
-        )
+        entries.append({"id": vid, "title": title, "url": _entry_url(e, vid)})
     return entries, info.get("title", "playlist")
+
+
+def _entry_url(entry: dict, vid: str, fallback: str = None) -> str:
+    """Best real URL for an entry.
+
+    yt-dlp reports the actual page URL for each entry, which matters for
+    non-YouTube sources -- synthesizing a youtube.com/watch?v= link from the
+    id produces a dead link when the id is a page fragment rather than a
+    YouTube video id. Only fall back to the YouTube form when nothing else
+    is available, since that is still the common case for bare video ids.
+    """
+    for key in ("webpage_url", "url", "original_url"):
+        val = entry.get(key)
+        if val and str(val).startswith("http"):
+            return val
+    if fallback:
+        return fallback
+    return f"https://www.youtube.com/watch?v={vid}"
 
 
 def fetch_transcript_text(video_id: str, languages=("en", "en-US", "en-GB", "hi")):
