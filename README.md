@@ -36,8 +36,43 @@ Audio — sharing the same URL, range, delay, and output-folder controls. Shows 
 live queue with per-video status, download progress with speed and ETA, a Stop
 button, and a file browser for the output folder with inline transcript viewing.
 
-The server binds to `127.0.0.1` only and runs one job at a time. It's a local
-tool, not something to expose to a network.
+The server binds to `127.0.0.1` and runs one job at a time.
+
+### Sharing it on a public URL
+
+Yoink has no login by default, and anyone who can reach it can queue downloads
+onto your disk and read files from the output folder. So before exposing it,
+set a token — every request then needs `?token=...` (remembered in a cookie
+afterwards) or an `X-Yoink-Token` header:
+
+```bash
+YOINK_TOKEN=$(python3 -c "import secrets;print(secrets.token_urlsafe(16))") python app.py
+```
+
+The startup banner prints the URL with the token already in it. Then tunnel
+localhost out — no need to change the bind address, since the tunnel connects
+from the same machine:
+
+```bash
+brew install cloudflared && cloudflared tunnel --url http://localhost:5000
+```
+
+That prints a random `https://….trycloudflare.com` URL that stays up as long
+as the command runs. Share the URL *with* the `?token=…` on the end.
+
+For LAN access instead of a tunnel, bind wider — Yoink warns loudly if you do
+this without a token:
+
+```bash
+HOST=0.0.0.0 YOINK_TOKEN=... python app.py
+```
+
+**Why a tunnel rather than deploying to a host:** YouTube aggressively blocks
+datacenter IPs, so the same download that works from your laptop typically
+gets a bot check or `403` from Render, Fly, Railway, or a VPS. A tunnel keeps
+the actual downloading on your own connection and only exposes the UI. Also
+note Flask's built-in server is a development server — fine behind a tunnel
+for personal use, not something to leave running as a public service.
 
 ## Command line
 

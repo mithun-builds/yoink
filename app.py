@@ -6,12 +6,21 @@ Run:
 
 Then open http://127.0.0.1:5000 in a browser.
 
-This is a single-user local tool: one fetch job runs at a time, its state
-lives in memory, and the browser polls /api/status for progress. It binds to
-127.0.0.1 only -- it is not meant to be exposed to a network.
+This is a single-user tool: one fetch job runs at a time and its state lives
+in memory, so the browser polls /api/status for progress.
+
+Environment:
+    HOST          interface to bind (default 127.0.0.1, localhost only)
+    PORT          port to serve on (default 5000)
+    YOINK_TOKEN   if set, every request must present this token -- required
+                  before exposing the app beyond localhost, since anyone who
+                  can reach it can start downloads onto this machine and read
+                  files from the output folder
 """
 
+import hmac
 import os
+import secrets
 import threading
 import time
 import webbrowser
@@ -24,8 +33,38 @@ from fetch_playlist_transcripts import run_fetch
 
 BASE_DIR = Path(__file__).resolve().parent
 UNAVAILABLE_MARKER = "[TRANSCRIPT UNAVAILABLE"
+TOKEN = os.environ.get("YOINK_TOKEN") or None
 
 app = Flask(__name__)
+
+
+# ------------------------------------------------------------------- access
+
+@app.before_request
+def _require_token():
+    """Gate every request when YOINK_TOKEN is set. Unset (the local default)
+    leaves the app open, which is fine on 127.0.0.1 and not fine anywhere else."""
+    if not TOKEN:
+        return None
+    supplied = (
+        request.args.get("token")
+        or request.headers.get("X-Yoink-Token")
+        or request.cookies.get("yoink_token")
+    )
+    if supplied and hmac.compare_digest(supplied, TOKEN):
+        return None
+    return jsonify({"error": "Unauthorized. Append ?token=... to the URL."}), 401
+
+
+@app.after_request
+def _persist_token(resp):
+    """Once a valid token arrives as ?token=..., remember it in a cookie so
+    the polling requests and download links work without carrying it along."""
+    if TOKEN and request.args.get("token") and resp.status_code < 400:
+        resp.set_cookie(
+            "yoink_token", TOKEN, httponly=True, samesite="Lax", max_age=86400
+        )
+    return resp
 
 # ---------------------------------------------------------------- job state
 
@@ -333,9 +372,27 @@ def api_download(name):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    host = os.environ.get("HOST", "127.0.0.1")
+    local_only = host in ("127.0.0.1", "localhost")
+
     url = f"http://127.0.0.1:{port}"
-    print(f"\n  Yoink running at {url}\n  Press Ctrl+C to stop.\n")
+    if TOKEN:
+        url += f"?token={TOKEN}"
+
+    print(f"\n  Yoink running at {url}")
+    if TOKEN:
+        print("  Token auth is ON — requests need ?token=... or an X-Yoink-Token header.")
+    elif not local_only:
+        # Binding beyond localhost with no token means anyone who can route to
+        # this port can queue downloads here and read the output folder.
+        print(
+            f"\n  !! Bound to {host} with NO token. Anyone who can reach this port can\n"
+            f"  !! start downloads on this machine and read your output folder.\n"
+            f"  !! Restart with a token:  YOINK_TOKEN={secrets.token_urlsafe(16)} HOST={host} python app.py"
+        )
+    print("  Press Ctrl+C to stop.\n")
+
     # only open a browser in the main process, not Flask's reloader child
-    if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+    if local_only and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+    app.run(host=host, port=port, debug=False, threaded=True)
