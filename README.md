@@ -1,10 +1,13 @@
-# YouTube (Incl. Playlist) Transcript Fetcher
+# Yoink
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Download transcripts for every video in a YouTube playlist (or a single video)
-using `yt-dlp` for playlist/video metadata and `youtube-transcript-api` for
-transcript text.
+Grab **transcripts, audio, or video** from a YouTube playlist (or a single
+video) and save them to a local folder. Uses `yt-dlp` for playlist metadata and
+media, and `youtube-transcript-api` for transcript text.
+
+Comes with a local web UI and three command-line entry points — use whichever
+suits the job.
 
 ## Setup
 
@@ -14,64 +17,88 @@ source venv/bin/activate      # Windows: venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-## Usage
+`ffmpeg` is optional but recommended — without it, video quality is capped to
+whatever single pre-muxed stream YouTube offers, and audio stays in its source
+format instead of being converted to mp3.
 
-Fetch all videos in a playlist:
+```bash
+brew install ffmpeg
+```
+
+## Web UI
+
+```bash
+python app.py
+```
+
+Opens <http://127.0.0.1:5000> in your browser. Three tabs — Transcripts, Video,
+Audio — sharing the same URL, range, delay, and output-folder controls. Shows a
+live queue with per-video status, download progress with speed and ETA, a Stop
+button, and a file browser for the output folder with inline transcript viewing.
+
+The server binds to `127.0.0.1` only and runs one job at a time. It's a local
+tool, not something to expose to a network.
+
+## Command line
+
+Transcripts:
 ```bash
 python fetch_playlist_transcripts.py "<playlist_or_watch_url>"
 ```
 
-Fetch only the first N videos:
+Video (capped at 720p):
 ```bash
-python fetch_playlist_transcripts.py "<playlist_url>" --limit 10
+python download_videos.py "<playlist_url>" --quality 720
 ```
 
-Fetch a specific range (1-based, inclusive) — useful for resuming without
-re-fetching videos you already have:
+Audio as mp3:
 ```bash
-python fetch_playlist_transcripts.py "<playlist_url>" --start 11 --end 41
+python download_videos.py "<playlist_url>" --audio-only
 ```
 
-Adjust the delay between requests (default 4 seconds) to reduce the chance of
-being rate-limited by YouTube:
-```bash
-python fetch_playlist_transcripts.py "<playlist_url>" --delay 8
-```
+Both scripts accept the same selection flags:
 
-Works on standalone video URLs too (no `list=` parameter needed) — the script
-detects there's no playlist and treats it as a single video.
+| Flag | Meaning |
+| --- | --- |
+| `--limit N` | Only the first N videos |
+| `--start N` / `--end N` | 1-based inclusive range, for resuming |
+| `--out DIR` | Output directory (default: `downloads`) |
+| `--delay S` | Seconds between requests |
+
+Filenames keep their true playlist position (`<position>_<video_id>_<title>`),
+so resuming with `--start` won't renumber anything you already have.
+
+Works on standalone video URLs too — no `list=` parameter needed.
 
 ## Output
 
-Creates a `downloads/` folder containing:
-- `playlist_index.json` — metadata (title, id, url) for every video found in the playlist
-- One `.txt` file per fetched video, named `<position>_<video_id>_<title>.txt`
-
-Use `--out <dir>` to write somewhere else:
-```bash
-python fetch_playlist_transcripts.py "<playlist_url>" --out my-folder
-```
+Everything lands in `downloads/` by default:
+- `playlist_index.json` — metadata (title, id, url) for every video in the playlist
+- One `.txt`, `.mp4`, or `.mp3` per fetched video
 
 ## Troubleshooting
 
 **"YouTube is blocking requests from your IP"**
-This is a rate-limit/IP block from YouTube, not a bug in the script. It
-typically happens after fetching many transcripts in a short time. The script
-now detects this precisely (not just by guessing from error text) and will
-automatically stop after 3 consecutive IP-block errors, rather than burning
+A rate-limit/IP block from YouTube, not a bug. It typically happens after
+fetching many transcripts in a short time. The transcript fetcher detects this
+precisely and stops after 3 consecutive IP-block errors rather than burning
 through the rest of the playlist on doomed requests. When it stops:
 - Wait 15–60+ minutes before retrying
 - Switch networks (e.g. mobile hotspot) or toggle a VPN to get a new IP
 - Increase `--delay` to space out requests further
 - Resume from where it stopped using `--start <n>`
-- As a last resort, fetch transcripts manually via YouTube's UI
-  ("..." menu under a video → Show transcript)
+
+**`HTTP Error 403: Forbidden` on video/audio downloads**
+Almost always an out-of-date `yt-dlp` — YouTube changes its player often and
+`yt-dlp` ships fixes quickly. Update it first:
+```bash
+pip install -U yt-dlp
+```
 
 **Playlist shows "0 videos found"**
-Make sure you're passing a URL that includes a `list=` parameter. The script
-normalizes combined `watch?v=...&list=...` URLs automatically, but a bare
-video URL with no playlist reference will only ever return that one video (by
-design — see standalone-video support above).
+Make sure the URL includes a `list=` parameter. Combined
+`watch?v=...&list=...` URLs are normalized automatically, but a bare video URL
+will only ever return that one video (by design).
 
 ## License
 

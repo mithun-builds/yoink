@@ -142,6 +142,149 @@ def fetch_transcript_text(video_id: str, languages=("en", "en-US", "en-GB", "hi"
     return text, None, False
 
 
+def select_targets(entries, limit=None, start=None, end=None):
+    """Return [(playlist_position, entry), ...] for the requested slice.
+
+    Positions are the TRUE 1-based playlist positions, preserved across
+    slicing so filenames stay stable when resuming with --start/--end.
+    """
+    if start or end:
+        start_idx = (start or 1) - 1  # convert to 0-based
+        end_idx = end if end else len(entries)  # inclusive, still 1-based here
+        numbered = list(enumerate(entries, start=1))
+        return numbered[start_idx:end_idx]
+    sliced = entries[:limit] if limit else entries
+    return list(enumerate(sliced, start=1))
+
+
+def run_fetch(
+    playlist_url,
+    out_dir="downloads",
+    limit=None,
+    start=None,
+    end=None,
+    delay=4.0,
+    on_event=None,
+    should_stop=None,
+):
+    """Fetch transcripts for a playlist, reporting progress as it goes.
+
+    This holds the actual work loop so the CLI and the web UI share one
+    implementation of the retry/backoff behaviour rather than duplicating it.
+
+    on_event(event_dict) is called as work proceeds. Event types:
+        {"type": "reading",     "url"}
+        {"type": "playlist",    "title", "total", "targets", "entries"}
+        {"type": "video_start", "pos", "total", "title", "video_id", "url"}
+        {"type": "rate_limited","pos", "wait"}
+        {"type": "video_done",  "pos", "ok", "error", "path"}
+        {"type": "blocked_abort"}
+        {"type": "stopped"}
+        {"type": "finished",    "out_dir", "written"}
+
+    should_stop() is polled between videos (and during the inter-request
+    delay); return True to abort early. A fetch already in flight is allowed
+    to finish -- transcript requests aren't cancellable mid-call.
+    """
+    emit = on_event or (lambda ev: None)
+    stop = should_stop or (lambda: False)
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    emit({"type": "reading", "url": playlist_url})
+    entries, playlist_title = get_playlist_entries(playlist_url)
+
+    with open(os.path.join(out_dir, "playlist_index.json"), "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2, ensure_ascii=False)
+
+    targets = select_targets(entries, limit=limit, start=start, end=end)
+    emit({
+        "type": "playlist",
+        "title": playlist_title,
+        "total": len(entries),
+        "targets": len(targets),
+        "entries": [
+            {"pos": pos, "title": e["title"], "video_id": e["id"], "url": e["url"]}
+            for pos, e in targets
+        ],
+    })
+
+    consecutive_blocks = 0
+    written = 0
+
+    for n, (playlist_pos, e) in enumerate(targets):
+        if stop():
+            emit({"type": "stopped"})
+            break
+
+        vid, title, url = e["id"], e["title"], e["url"]
+        emit({
+            "type": "video_start",
+            "pos": playlist_pos,
+            "total": len(entries),
+            "title": title,
+            "video_id": vid,
+            "url": url,
+        })
+
+        text, err, was_blocked = fetch_transcript_text(vid)
+
+        # One retry with a longer backoff, but only for a genuine IP-block
+        if was_blocked:
+            emit({"type": "rate_limited", "pos": playlist_pos, "wait": 20})
+            if _interruptible_sleep(20, stop):
+                emit({"type": "stopped"})
+                break
+            text, err, was_blocked = fetch_transcript_text(vid)
+
+        consecutive_blocks = consecutive_blocks + 1 if was_blocked else 0
+
+        fname = f"{playlist_pos:02d}_{vid}_{sanitize_filename(title)}.txt"
+        fpath = os.path.join(out_dir, fname)
+
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.write(f"Title: {title}\nURL: {url}\n\n")
+            f.write(text if text else f"[TRANSCRIPT UNAVAILABLE: {err}]")
+
+        if text:
+            written += 1
+        emit({
+            "type": "video_done",
+            "pos": playlist_pos,
+            "ok": bool(text),
+            "error": err,
+            "path": fpath,
+        })
+
+        # Stop early if YouTube is clearly blocking us outright -- further
+        # requests will just fail the same way and waste time.
+        if consecutive_blocks >= 3:
+            emit({"type": "blocked_abort"})
+            break
+
+        # pause between requests (skip after the very last one)
+        if n < len(targets) - 1:
+            if _interruptible_sleep(delay, stop):
+                emit({"type": "stopped"})
+                break
+
+    emit({"type": "finished", "out_dir": out_dir, "written": written})
+    return written
+
+
+def _interruptible_sleep(seconds, stop):
+    """Sleep in short slices so a stop request is noticed promptly.
+    Returns True if the sleep was cut short by stop()."""
+    waited = 0.0
+    while waited < seconds:
+        if stop():
+            return True
+        chunk = min(0.25, seconds - waited)
+        time.sleep(chunk)
+        waited += chunk
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -186,71 +329,47 @@ Examples:
     )
     args = parser.parse_args()
 
-    os.makedirs(args.out, exist_ok=True)
-
-    print(f"Reading playlist: {args.playlist_url}")
-    entries, playlist_title = get_playlist_entries(args.playlist_url)
-    print(f"Playlist: {playlist_title}  |  {len(entries)} videos found")
-
-    with open(os.path.join(args.out, "playlist_index.json"), "w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2, ensure_ascii=False)
-
-    if args.start or args.end:
-        start_idx = (args.start or 1) - 1  # convert to 0-based
-        end_idx = args.end if args.end else len(entries)  # inclusive, still 1-based here
-        # zip each entry with its TRUE playlist position (1-based) before slicing
-        numbered = list(enumerate(entries, start=1))
-        targets = numbered[start_idx:end_idx]
-    else:
-        sliced = entries[: args.limit] if args.limit else entries
-        targets = list(enumerate(sliced, start=1))
-
-    consecutive_blocks = 0
-
-    for n, (playlist_pos, e) in enumerate(targets):
-        vid, title, url = e["id"], e["title"], e["url"]
-        print(f"[{playlist_pos}/{len(entries)}] {title} ({vid}) ... ", end="", flush=True)
-
-        text, err, was_blocked = fetch_transcript_text(vid)
-
-        # One retry with a longer backoff, but only for a genuine IP-block
-        if was_blocked:
-            print("rate-limited, waiting 20s and retrying once... ", end="", flush=True)
-            time.sleep(20)
-            text, err, was_blocked = fetch_transcript_text(vid)
-
-        if was_blocked:
-            consecutive_blocks += 1
-        else:
-            consecutive_blocks = 0
-
-        fname = f"{playlist_pos:02d}_{vid}_{sanitize_filename(title)}.txt"
-        fpath = os.path.join(args.out, fname)
-
-        with open(fpath, "w", encoding="utf-8") as f:
-            f.write(f"Title: {title}\nURL: {url}\n\n")
-            if text:
-                f.write(text)
-            else:
-                f.write(f"[TRANSCRIPT UNAVAILABLE: {err}]")
-
-        print("done" if text else f"SKIPPED ({err})")
-
-        # Stop early if YouTube is clearly blocking us outright -- further
-        # requests will just fail the same way and waste time.
-        if consecutive_blocks >= 3:
+    def report(ev):
+        t = ev["type"]
+        if t == "reading":
+            print(f"Reading playlist: {ev['url']}")
+        elif t == "playlist":
+            print(f"Playlist: {ev['title']}  |  {ev['total']} videos found")
+        elif t == "video_start":
+            print(
+                f"[{ev['pos']}/{ev['total']}] {ev['title']} ({ev['video_id']}) ... ",
+                end="", flush=True,
+            )
+        elif t == "rate_limited":
+            print(
+                f"rate-limited, waiting {ev['wait']}s and retrying once... ",
+                end="", flush=True,
+            )
+        elif t == "video_done":
+            print("done" if ev["ok"] else f"SKIPPED ({ev['error']})")
+        elif t == "blocked_abort":
             print(
                 "\nStopping: 3 consecutive IP-block errors. "
                 "Wait before retrying, or switch networks/VPN, then resume with --start."
             )
-            break
+        elif t == "finished":
+            out = ev["out_dir"]
+            shown = out if os.path.isabs(out) else f"./{out}"
+            print(f"\nAll files written to {shown.rstrip('/')}/")
+            print(
+                "Next: paste the .txt contents (or the whole folder) "
+                "back to Claude for synthesis."
+            )
 
-        # pause between requests (skip after the very last one)
-        if n < len(targets) - 1:
-            time.sleep(args.delay)
-
-    print(f"\nAll files written to ./{args.out}/")
-    print("Next: paste the .txt contents (or the whole folder) back to Claude for synthesis.")
+    run_fetch(
+        args.playlist_url,
+        out_dir=args.out,
+        limit=args.limit,
+        start=args.start,
+        end=args.end,
+        delay=args.delay,
+        on_event=report,
+    )
 
 
 if __name__ == "__main__":
