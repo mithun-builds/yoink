@@ -4,3 +4,4 @@ transcripts/
 __pycache__/
 *.pyc
 .DS_Store
+yoink.config.json

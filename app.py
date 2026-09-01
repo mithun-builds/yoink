@@ -21,6 +21,8 @@ Environment:
 import hmac
 import os
 import secrets
+import subprocess
+import sys
 import threading
 import time
 import webbrowser
@@ -28,6 +30,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
+from config import default_out, list_subfolders, resolve_out, save_config
 from download_videos import ffmpeg_available, run_download
 from fetch_playlist_transcripts import run_fetch
 
@@ -91,7 +94,7 @@ def _blank_job():
         "items": [],
         "log": [],
         "error": None,
-        "out_dir": "downloads",
+        "out_dir": default_out(),
         "started_at": None,
         "finished_at": None,
     }
@@ -102,13 +105,10 @@ def _log(job, message):
     del job["log"][:-400]  # keep the tail bounded
 
 
-def _resolve_out(out):
-    """Resolve the output directory against the app directory, so the UI does
-    not depend on the shell's cwd. Absolute paths are honoured as given."""
-    p = Path(out).expanduser()
-    if not p.is_absolute():
-        p = BASE_DIR / p
-    return p.resolve()
+def _resolve_out(out=None):
+    """Resolve a download folder, falling back to the configured default.
+    Relative paths resolve against the app directory, not the shell's cwd."""
+    return resolve_out(out)
 
 
 def _handle_event(job, ev):
@@ -264,7 +264,7 @@ def api_start():
         delay = default_delay
     delay = max(0.0, min(delay, 120.0))
 
-    out_dir = _resolve_out(data.get("out") or "downloads")
+    out_dir = _resolve_out(data.get("out"))
 
     params = {
         "url": url,
@@ -310,9 +310,70 @@ def api_env():
     return jsonify({"ffmpeg": ffmpeg_available()})
 
 
+@app.get("/api/config")
+def api_config_get():
+    out = default_out()
+    resolved = resolve_out(out)
+    return jsonify({
+        "out_dir": out,
+        "resolved": str(resolved),
+        "exists": resolved.is_dir(),
+        "folders": list_subfolders(),
+        "env_override": bool(os.environ.get("YOINK_OUT")),
+    })
+
+
+@app.post("/api/config")
+def api_config_set():
+    data = request.get_json(silent=True) or {}
+    out = (data.get("out_dir") or "").strip()
+    if not out:
+        return jsonify({"error": "Enter a folder."}), 400
+    if os.environ.get("YOINK_OUT"):
+        return jsonify({
+            "error": "YOINK_OUT is set in the environment and overrides the saved "
+                     "folder. Unset it to change the default here."
+        }), 409
+
+    resolved = resolve_out(out)
+    if data.get("create"):
+        try:
+            resolved.mkdir(parents=True, exist_ok=True)
+        except OSError as ex:
+            return jsonify({"error": f"Could not create folder: {ex}"}), 400
+
+    save_config(out_dir=out)
+    return jsonify({
+        "out_dir": out,
+        "resolved": str(resolved),
+        "exists": resolved.is_dir(),
+        "folders": list_subfolders(),
+    })
+
+
+@app.post("/api/reveal")
+def api_reveal():
+    """Open the download folder in the OS file browser. Local convenience --
+    refused when the app is reachable from off-box, since opening windows on
+    someone else's machine is not a remote user's business."""
+    if TOKEN or os.environ.get("HOST", "127.0.0.1") not in ("127.0.0.1", "localhost"):
+        return jsonify({"error": "Only available when running locally."}), 403
+
+    target = _resolve_out((request.get_json(silent=True) or {}).get("out"))
+    if not target.is_dir():
+        return jsonify({"error": "Folder does not exist yet."}), 404
+
+    opener = {"darwin": "open", "win32": "explorer"}.get(sys.platform, "xdg-open")
+    try:
+        subprocess.Popen([opener, str(target)])  # path only, no shell
+    except OSError as ex:
+        return jsonify({"error": str(ex)}), 500
+    return jsonify({"ok": True})
+
+
 @app.get("/api/files")
 def api_files():
-    out_dir = _resolve_out(request.args.get("out") or "downloads")
+    out_dir = _resolve_out(request.args.get("out"))
     if not out_dir.is_dir():
         return jsonify({"dir": str(out_dir), "files": []})
 
@@ -342,7 +403,7 @@ def api_files():
 
 def _safe_file(out_param, name):
     """Resolve `name` inside the output dir, refusing anything that escapes it."""
-    out_dir = _resolve_out(out_param or "downloads")
+    out_dir = _resolve_out(out_param)
     target = (out_dir / name).resolve()
     if out_dir not in target.parents or not target.is_file():
         return None, out_dir

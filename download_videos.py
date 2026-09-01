@@ -16,6 +16,7 @@ import shutil
 
 import yt_dlp
 
+from config import default_out
 from fetch_playlist_transcripts import (
     get_playlist_entries,
     sanitize_filename,
@@ -198,7 +199,10 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Only fetch the first N videos")
     parser.add_argument("--start", type=int, default=None, help="1-based position to start from")
     parser.add_argument("--end", type=int, default=None, help="1-based position to stop at (inclusive)")
-    parser.add_argument("--out", default="downloads", help="Output directory (default: downloads)")
+    parser.add_argument(
+        "--out", default=default_out(),
+        help="Output directory (default: the folder configured in yoink.config.json)",
+    )
     parser.add_argument(
         "--quality", type=int, default=None,
         help="Cap video height, e.g. 720 or 1080 (default: best available)",

@@ -105,9 +105,22 @@ so resuming with `--start` won't renumber anything you already have.
 
 Works on standalone video URLs too — no `list=` parameter needed.
 
+## Download folder
+
+The folder is set in the UI — type a path (or pick an existing one from the
+dropdown) and hit **Save as default**; it's remembered in `yoink.config.json`
+and used by the CLI scripts too, so `--out` becomes optional. **Open** reveals
+it in Finder. Editing the field without saving applies to that run only.
+
+Precedence, highest first: an explicit `--out` / UI value, then the
+`YOINK_OUT` environment variable, then `yoink.config.json`, then `downloads`.
+
+Relative paths resolve against the project directory, not your shell's cwd, so
+the UI and CLI always agree on where `downloads` is.
+
 ## Output
 
-Everything lands in `downloads/` by default:
+Everything lands in the configured folder (`downloads/` by default):
 - `playlist_index.json` — metadata (title, id, url) for every video in the playlist
 - One `.txt`, `.mp4`, or `.mp3` per fetched video
 
