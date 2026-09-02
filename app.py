@@ -31,6 +31,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from config import default_out, list_subfolders, resolve_out, save_config
+from courses import quick_picks
 from download_videos import ffmpeg_available, run_download
 from fetch_playlist_transcripts import run_fetch
 
@@ -308,6 +309,12 @@ def api_status():
 @app.get("/api/env")
 def api_env():
     return jsonify({"ffmpeg": ffmpeg_available()})
+
+
+@app.get("/api/picks")
+def api_picks():
+    """Curated free full-course playlists offered as one-click picks."""
+    return jsonify({"picks": quick_picks()})
 
 
 @app.get("/api/config")

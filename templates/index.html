@@ -120,6 +120,14 @@
   .opts { display: grid; gap: 12px;
           grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); }
 
+  .picks { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; align-items: baseline; }
+  .picks .picks-label { font-size: 11.5px; font-weight: 600; letter-spacing: 0.03em;
+    text-transform: uppercase; color: var(--muted); margin-right: 2px; }
+  .pick { font: inherit; font-size: 12.5px; font-weight: 500; padding: 4px 10px;
+    border-radius: 99px; background: var(--sunken); border: 1px solid var(--line);
+    color: var(--text-2); cursor: pointer; }
+  .pick:hover { color: var(--text); border-color: var(--accent); }
+
   /* ---------------------------------------------------------- folder */
   .folder { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
   .folder-row { display: flex; gap: 8px; }
@@ -249,6 +257,7 @@
     <div class="url-row">
       <label for="url">Playlist or video URL</label>
       <input id="url" type="url" placeholder="https://www.youtube.com/playlist?list=…" autocomplete="off" spellcheck="false">
+      <div class="picks" id="picks"></div>
     </div>
 
     <div class="opts">
@@ -555,6 +564,20 @@ $("reveal").addEventListener("click", async () => {
     const d = await r.json().catch(() => ({}));
     renderDirMeta(`<span class="tag bad">${esc(d.error || "Could not open")}</span>`);
   }
+});
+
+fetch("/api/picks").then(r => r.json()).then(d => {
+  if (!d.picks || !d.picks.length) return;
+  $("picks").innerHTML = `<span class="picks-label">DeepLearning.AI</span>` +
+    d.picks.map(p =>
+      `<button class="pick" data-url="${esc(p.url)}">${esc(p.title)}</button>`).join("");
+}).catch(() => {});
+
+$("picks").addEventListener("click", (e) => {
+  const u = e.target.dataset.url;
+  if (!u) return;
+  $("url").value = u;
+  $("url").focus();
 });
 
 fetch("/api/env").then(r => r.json()).then(e => {

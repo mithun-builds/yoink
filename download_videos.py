@@ -44,7 +44,11 @@ def build_format(quality=None, audio_only=False):
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
             }]
-        return "bestaudio/best", pps, None
+        # Fall back to the SMALLEST muxed stream, not the best one. HLS course
+        # sources publish only muxed A/V variants, so "bestaudio" matches
+        # nothing and a "best" fallback would pull the 1080p stream just to
+        # throw its video away -- hundreds of MB for a few MB of mp3.
+        return "bestaudio/worst", pps, None
 
     if quality:
         fmt = (
@@ -162,10 +166,14 @@ def run_download(
         if merge_to:
             ydl_opts["merge_output_format"] = merge_to
 
+        # For scraped course lessons the page URL is not resolvable by yt-dlp;
+        # hand it the HLS manifest we already found instead.
+        target = e.get("media") or url
+
         err = None
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+                ydl.download([target])
             downloaded += 1
         except yt_dlp.utils.DownloadCancelled:
             emit({"type": "stopped"})

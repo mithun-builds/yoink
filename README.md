@@ -74,6 +74,31 @@ the actual downloading on your own connection and only exposes the UI. Also
 note Flask's built-in server is a development server — fine behind a tunnel
 for personal use, not something to leave running as a public service.
 
+## Courses
+
+**DeepLearning.AI free short courses** work directly — paste a course URL and
+all its lessons are fetched in order:
+
+```bash
+python fetch_playlist_transcripts.py "https://learn.deeplearning.ai/courses/chatgpt-prompt-eng"
+```
+
+Those pages are a React app, so yt-dlp can't walk them; `courses.py` scrapes
+each lesson's HLS manifest and English WebVTT track instead. All three modes
+work — Transcripts uses the subtitle track, Video and Audio use the manifest.
+Quizzes and notebook-only lessons have no media and are skipped rather than
+written as empty files.
+
+**Full specializations** are published free on DeepLearning.AI's YouTube
+channel, and the UI offers them as one-click picks: the five Deep Learning
+Specialization courses, the Machine Learning Specialization, MLOps, and AI for
+Good.
+
+**Not supported:** Coursera (no yt-dlp extractor, login-gated) and Udemy
+(Widevine DRM — yt-dlp refuses it by design). `deeplearning.ai/specializations/*`
+pages are marketing only; that content lives on Coursera. For courses you're
+enrolled in, both platforms have official offline download in their mobile apps.
+
 ## Command line
 
 Transcripts:

@@ -32,6 +32,7 @@ from youtube_transcript_api._errors import (
     IpBlocked,
 )
 
+import courses
 from config import default_out
 
 
@@ -54,6 +55,11 @@ def normalize_playlist_url(url: str) -> str:
 def get_playlist_entries(playlist_url: str):
     """Return a list of dicts: {id, title, url} for every video in the playlist,
     without downloading video files (flat extraction)."""
+    # DeepLearning.AI short courses are a React app yt-dlp cannot walk; the
+    # courses module scrapes their lesson list and media URLs instead.
+    if courses.is_course_url(playlist_url):
+        return courses.course_entries(playlist_url)
+
     clean_url = normalize_playlist_url(playlist_url)
     ydl_opts = {
         "extract_flat": "in_playlist",
@@ -236,7 +242,13 @@ def run_fetch(
             "url": url,
         })
 
-        text, err, was_blocked = fetch_transcript_text(vid)
+        if e.get("subtitle") is not None or e.get("media"):
+            # A scraped course lesson: its transcript is the WebVTT track, a
+            # plain CDN file, so none of the YouTube backoff logic applies.
+            text, err = courses.subtitle_text(e.get("subtitle"))
+            was_blocked = False
+        else:
+            text, err, was_blocked = fetch_transcript_text(vid)
 
         # One retry with a longer backoff, but only for a genuine IP-block
         if was_blocked:
